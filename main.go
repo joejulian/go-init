@@ -14,9 +14,21 @@ import (
 	"time"
 )
 
+type environment []string
+
 var (
 	versionString = "undefined"
+	env           environment
 )
+
+func (e *environment) String() string {
+	return strings.Join(*e, " ")
+}
+
+func (e *environment) Set(value string) error {
+	*e = environment(append(*e, value))
+	return nil
+}
 
 func main() {
 	var preStartCmd string
@@ -27,6 +39,7 @@ func main() {
 	flag.StringVar(&preStartCmd, "pre", "", "Pre-start command")
 	flag.StringVar(&mainCmd, "main", "", "Main command")
 	flag.StringVar(&postStopCmd, "post", "", "Post-stop command")
+	flag.Var(&env, "env", "Environment variable NAME=VALUE (can be used multiple times)")
 	flag.BoolVar(&version, "version", false, "Display go-init version")
 	flag.Parse()
 
@@ -146,6 +159,7 @@ func run(command string) error {
 	cmd := exec.Command(commandStr, argsSlice...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = append(cmd.Env, env...)
 	// Create a dedicated pidgroup
 	// used to forward signals to
 	// main process and all children
