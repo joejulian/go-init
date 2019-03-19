@@ -19,6 +19,7 @@ type environment []string
 var (
 	versionString = "undefined"
 	env           environment
+	termTimeout   time.Duration
 )
 
 func (e *environment) String() string {
@@ -39,6 +40,7 @@ func main() {
 	flag.StringVar(&preStartCmd, "pre", "", "Pre-start command")
 	flag.StringVar(&mainCmd, "main", "", "Main command")
 	flag.StringVar(&postStopCmd, "post", "", "Post-stop command")
+	flag.DurationVar(&termTimeout, "term_timeout", 0, "Wait for this long before shutting down the main command")
 	flag.Var(&env, "env", "Environment variable NAME=VALUE (can be used multiple times)")
 	flag.BoolVar(&version, "version", false, "Display go-init version")
 	flag.Parse()
@@ -168,9 +170,21 @@ func run(command string) error {
 	// Goroutine for signals forwarding
 	go func() {
 		for sig := range sigs {
-			// Ignore SIGCHLD signals since
-			// thez are only usefull for go-init
-			if sig != syscall.SIGCHLD {
+			switch sig {
+			case syscall.SIGCHLD:
+				// Ignore SIGCHLD signals since
+				// they are only useful for go-init
+				break
+			case syscall.SIGTERM:
+				if termTimeout > 0 {
+					log.Printf(
+						"[go-init] Received SIGTERM => sleeping for %s and exit",
+						termTimeout,
+					)
+					time.Sleep(termTimeout)
+				}
+				fallthrough
+			default:
 				// Forward signal to main process and all children
 				syscall.Kill(-cmd.Process.Pid, sig.(syscall.Signal))
 			}
