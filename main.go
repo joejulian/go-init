@@ -6,12 +6,11 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
-	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/joejulian/go-init/pkg/sysinit"
 )
 
 type environment []string
@@ -58,18 +57,18 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go removeZombies(ctx, &wg)
+	go sysinit.RemoveZombies(ctx, &wg)
 
 	// Launch pre-start command
 	if preStartCmd == "" {
 		log.Println("[go-init] No pre-start command defined, skip")
 	} else {
 		log.Printf("[go-init] Pre-start command launched : %s\n", preStartCmd)
-		err := run(preStartCmd)
+		err := sysinit.Run(preStartCmd)
 		if err != nil {
 			log.Println("[go-init] Pre-start command failed")
 			log.Printf("[go-init] %s\n", err)
-			cleanQuit(cancel, &wg, 1)
+			sysinit.CleanQuit(cancel, &wg, 1)
 		} else {
 			log.Printf("[go-init] Pre-start command exited")
 		}
@@ -78,7 +77,7 @@ func main() {
 	// Launch main command
 	var mainRC int
 	log.Printf("[go-init] Main command launched : %s\n", mainCmd)
-	err := run(mainCmd)
+	err := sysinit.Run(mainCmd)
 	if err != nil {
 		log.Println("[go-init] Main command failed")
 		log.Printf("[go-init] %s\n", err)
@@ -92,125 +91,16 @@ func main() {
 		log.Println("[go-init] No post-stop command defined, skip")
 	} else {
 		log.Printf("[go-init] Post-stop command launched : %s\n", postStopCmd)
-		err := run(postStopCmd)
+		err := sysinit.Run(postStopCmd)
 		if err != nil {
 			log.Println("[go-init] Post-stop command failed")
 			log.Printf("[go-init] %s\n", err)
-			cleanQuit(cancel, &wg, 1)
+			sysinit.CleanQuit(cancel, &wg, 1)
 		} else {
 			log.Printf("[go-init] Post-stop command exited")
 		}
 	}
 
 	// Wait removeZombies goroutine
-	cleanQuit(cancel, &wg, mainRC)
-}
-
-func removeZombies(ctx context.Context, wg *sync.WaitGroup) {
-	for {
-		var status syscall.WaitStatus
-
-		// Wait for orphaned zombie process
-		pid, _ := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
-
-		if pid <= 0 {
-			// PID is 0 or -1 if no child waiting
-			// so we wait for 1 second for next check
-			time.Sleep(1 * time.Second)
-		} else {
-			// PID is > 0 if a child was reaped
-			// we immediately check if another one
-			// is waiting
-			continue
-		}
-
-		// Non-blocking test
-		// if context is done
-		select {
-		case <-ctx.Done():
-			// Context is done
-			// so we stop goroutine
-			wg.Done()
-			return
-		default:
-		}
-	}
-}
-
-func run(command string) error {
-
-	var commandStr string
-	var argsSlice []string
-
-	// Split cmd and args
-	commandSlice := strings.Fields(command)
-	commandStr = commandSlice[0]
-	// if there is args
-	if len(commandSlice) > 1 {
-		argsSlice = commandSlice[1:]
-	}
-
-	// Register chan to receive system signals
-	sigs := make(chan os.Signal, 1)
-	defer close(sigs)
-	signal.Notify(sigs)
-	defer signal.Reset()
-
-	// Define command and rebind
-	// stdout and stdin
-	cmd := exec.Command(commandStr, argsSlice...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = append(cmd.Env, env...)
-	// Create a dedicated pidgroup
-	// used to forward signals to
-	// main process and all children
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	// Goroutine for signals forwarding
-	go func() {
-		for sig := range sigs {
-			switch sig {
-			case syscall.SIGCHLD:
-				// Ignore SIGCHLD signals since
-				// they are only useful for go-init
-				break
-			case syscall.SIGTERM:
-				if termTimeout > 0 {
-					log.Printf(
-						"[go-init] Received SIGTERM => sleeping for %s and exit",
-						termTimeout,
-					)
-					time.Sleep(termTimeout)
-				}
-				fallthrough
-			default:
-				// Forward signal to main process and all children
-				syscall.Kill(-cmd.Process.Pid, sig.(syscall.Signal))
-			}
-		}
-	}()
-
-	// Start defined command
-	err := cmd.Start()
-	if err != nil {
-		return err
-	}
-
-	// Wait for command to exit
-	err = cmd.Wait()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func cleanQuit(cancel context.CancelFunc, wg *sync.WaitGroup, code int) {
-	// Signal zombie goroutine to stop
-	// and wait for it to release waitgroup
-	cancel()
-	wg.Wait()
-
-	os.Exit(code)
+	sysinit.CleanQuit(cancel, &wg, mainRC)
 }
