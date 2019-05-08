@@ -84,10 +84,6 @@ func Run(command string) error {
 	go func() {
 		for sig := range sigs {
 			switch sig {
-			case syscall.SIGCHLD:
-				// Ignore SIGCHLD signals since
-				// they are only useful for go-init
-				break
 			case syscall.SIGTERM:
 				if termTimeout > 0 {
 					log.Printf(
